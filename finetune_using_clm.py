@@ -153,7 +153,7 @@ def create_optimizer(cfg, model):
             "weight_decay": 0.0,
         },
     ]
-    return torch.optim.AdamW(
+    return torch.optim.Adamax(
         optimizer_grouped_parameters, lr=cfg.training.learning_rate
     )
 
