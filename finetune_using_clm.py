@@ -26,6 +26,7 @@ from datasets import Dataset, DatasetDict, load_dataset
 from omegaconf import OmegaConf
 from omegaconf.dictconfig import DictConfig
 from torch.utils.data import DataLoader
+import torch.nn.utils.prune as prune
 from tqdm.auto import tqdm
 from transformers import (
     AutoConfig,
@@ -241,6 +242,10 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
 
     tokenizer, model = load_model_and_tokenizer(cfg)
+    # Add model pruning
+    prune.random_unstructured(model, name="weight", amount=0.2)
+    # prune.l1_unstructured(model, name="bias", amount=3)
+    
     optimizer = create_optimizer(cfg, model)
 
     lr_scheduler = get_scheduler(
