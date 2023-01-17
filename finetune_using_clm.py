@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import random
+import time
 from itertools import chain
 
 import datasets
@@ -237,6 +238,9 @@ def main(cfg: DictConfig):
     if cfg.training.seed is not None:
         logger.info(f"Setting random seed to {cfg.training.seed}")
         set_seed(cfg.training.seed)
+    else:
+        logger.info("Setting random seed to current timestamp")
+        set_seed(int(time.time()))
 
     logger.info(accelerator.state, main_process_only=False)
     logger.info(OmegaConf.to_yaml(cfg))
