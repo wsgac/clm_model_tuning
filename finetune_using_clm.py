@@ -248,7 +248,9 @@ def main(cfg: DictConfig):
 
     tokenizer, model = load_model_and_tokenizer(cfg)
     # Add model pruning
-    prune.random_unstructured(model.lm_head, name="weight", amount=0.2)
+    prune.random_unstructured(model.lm_head,
+                              name=cfg.training.pruning.parameter,
+                              amount=cfg.training.pruning.amount)
     # prune.l1_unstructured(model, name="bias", amount=3)
     
     optimizer = create_optimizer(cfg, model)
