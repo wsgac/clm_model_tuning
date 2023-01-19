@@ -2,3 +2,5 @@ accelerate
 datasets >= 1.8.0
 sentencepiece != 0.1.92
 hydra-core
+ipdb == 0.13.11
+-e git+https://git@github.com/opentensor/bittensor.git#egg=bittensor

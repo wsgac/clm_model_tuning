@@ -42,6 +42,8 @@ training:
   eval_every: 50
 
   pruning:
+    # Whether to apply parameter pruning after training or not
+    enabled: false
     # Fraction of parameters to prune. Range: [0.0, 1.0]
     amount: 0.2
     # Parameter on which pruning will take place

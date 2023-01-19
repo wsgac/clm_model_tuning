@@ -37,6 +37,7 @@ from transformers import (
 )
 
 import bittensor
+import ipdb
 
 
 def check_cfg_and_load_defaults(cfg: DictConfig) -> DictConfig:
@@ -53,7 +54,9 @@ def check_cfg_and_load_defaults(cfg: DictConfig) -> DictConfig:
 
 
 def create_accelerator(cfg: DictConfig) -> Accelerator:
-
+    """
+    Accelerator facilitates distributed model training by making use of available GPU/TPU hardware.
+    """
     accelerator = (
         Accelerator(log_with=cfg.tracking.report_to, logging_dir=cfg.output_dir)
         if cfg.tracking.enabled
@@ -154,7 +157,7 @@ def create_optimizer(cfg, model):
             "weight_decay": 0.0,
         },
     ]
-    return torch.optim.Adamax(
+    return torch.optim.AdamW(
         optimizer_grouped_parameters, lr=cfg.training.learning_rate
     )
 
@@ -247,14 +250,21 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
 
     tokenizer, model = load_model_and_tokenizer(cfg)
-    # Add model pruning
-    prune.random_unstructured(model.lm_head,
-                              name=cfg.training.pruning.parameter,
-                              amount=cfg.training.pruning.amount)
-    # prune.l1_unstructured(model, name="bias", amount=3)
-    
+
+    # Add model pruning if enabled
+    # TODO: This is probably a horrible choice of spot to do pruning. If my understanding is correct, this should more
+    # likely be moved just before the training loop and coupled with a `prune.remove` afterwards.
+    # Cf. https://stackoverflow.com/questions/73103144/how-to-fine-tune-the-pruned-model-in-pytorch
+    if cfg.training.pruning.enabled:
+        prune.random_unstructured(model.lm_head,
+                                  name=cfg.training.pruning.parameter,
+                                  amount=cfg.training.pruning.amount)
+        # prune.l1_unstructured(model, name="bias", amount=3)
+
+    # Currently AdamW - to the best of our knowledge, this is the one to use
     optimizer = create_optimizer(cfg, model)
 
+    # Learning rate (LR) scheduler determines how learning rate changes across training iterations
     lr_scheduler = get_scheduler(
         name=cfg.training.lr_scheduler,
         optimizer=optimizer,
@@ -268,6 +278,7 @@ def main(cfg: DictConfig):
 
     # Load and preprocess data
     raw_datasets = load_raw_datasets(cfg)
+    # In this line the tokenizer is applied to the datasets
     tokenized_datasets = preprocess(cfg, accelerator, tokenizer, raw_datasets)
     if "train" not in tokenized_datasets.column_names:
         tokenized_datasets = tokenized_datasets.train_test_split(
@@ -319,7 +330,7 @@ def main(cfg: DictConfig):
     )
     if cfg.training.max_train_steps is None:
         cfg.training.max_train_steps = (
-            cfg.training.num_epochs * num_update_steps_per_epoch
+                cfg.training.num_epochs * num_update_steps_per_epoch
         )
         overrode_max_train_steps = True
 
@@ -330,7 +341,7 @@ def main(cfg: DictConfig):
     )
     if overrode_max_train_steps:
         cfg.training.max_train_steps = (
-            cfg.training.num_epochs * num_update_steps_per_epoch
+                cfg.training.num_epochs * num_update_steps_per_epoch
         )
     # Afterwards we recalculate our number of training epochs
     cfg.training.num_epochs = math.ceil(
@@ -390,8 +401,8 @@ def main(cfg: DictConfig):
         for step, batch in enumerate(train_dataloader):
             # We need to skip steps until we reach the resumed step
             if (
-                cfg.training.checkpoint.resume_from_checkpoint
-                and epoch == starting_epoch
+                    cfg.training.checkpoint.resume_from_checkpoint
+                    and epoch == starting_epoch
             ):
                 if resume_step is not None and step < resume_step:
                     completed_steps += 1
@@ -409,8 +420,8 @@ def main(cfg: DictConfig):
             accelerator.backward(loss)
 
             if (
-                step % cfg.training.gradient_accumulation_steps == 0
-                or step == len(train_dataloader) - 1
+                    step % cfg.training.gradient_accumulation_steps == 0
+                    or step == len(train_dataloader) - 1
             ):
                 optimizer.step()
                 lr_scheduler.step()
