@@ -223,6 +223,7 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
             num_proc=cfg.tokenizer.preprocessing_num_workers,
             load_from_cache_file=not cfg.dataset.overwrite_cache,
             desc="Running tokenizer on dataset",
+            remove_columns=["text"]
         )
 
         if cfg.dataset.concatenate_raw is True:
