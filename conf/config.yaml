@@ -41,13 +41,19 @@ training:
   lr_warmup_steps: 0
   eval_every: 50
 
-  pruning:
+  model_pruning:
     # Whether to apply parameter pruning after training or not
     enabled: false
     # Fraction of parameters to prune. Range: [0.0, 1.0]
     amount: 0.2
     # Parameter on which pruning will take place
     parameter: "weight"
+
+  # Pseudo-randomly drop a certain percentage of input tokens
+  input_pruning:
+    enabled: true
+    # Percentage of input tokens to drop
+    ratio: 0.05
 
   checkpoint:
     resume_from_checkpoint: 0 # integer representing which checkpoint to load from, or <= 0 to not

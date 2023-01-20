@@ -62,6 +62,7 @@ def create_accelerator(cfg: DictConfig) -> Accelerator:
         if cfg.tracking.enabled
         else Accelerator()
     )
+    # accelerator.distributed_type = DistributedType.MULTI_GPU
     if accelerator.is_local_main_process:
         datasets.utils.logging.set_verbosity_warning()
         transformers.utils.logging.set_verbosity_info()
@@ -198,11 +199,24 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
             truncation=True,
             max_length=cfg.dataset.block_size,
         )
+        # Pseudo-randomly drop part of the inputs
+        if cfg.training.input_pruning.enabled:
+            token_count = len(result["input_ids"])
+            indices = list(range(token_count))
+            ratio = cfg.training.input_pruning.ratio
+            kept_token_count = int((1.0-ratio)*token_count)
+            # Randomly keep the designated number of indices; make it a set for fast lookup
+            indices_to_keep = set(random.sample(indices, kept_token_count))
+            # Apply element dropping consistently (so that we drop matching coefficients)
+            result["input_ids"] = [item for i, item in enumerate(result["input_ids"]) if i in indices_to_keep]
+            result["attention_mask"] = [item for i, item in enumerate(result["attention_mask"]) if i in indices_to_keep]
+
         result["labels"] = result["input_ids"].copy()
         return result
 
     with accelerator.main_process_first():
 
+        # Here the actual magic takes place
         tokenized_datasets = raw_datasets.map(
             tokenize_fn,
             batched=True,
@@ -250,15 +264,22 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
 
     tokenizer, model = load_model_and_tokenizer(cfg)
+    # TODO: tokenizer
+    # Typical representation:
+    # PreTrainedTokenizerFast(name_or_path='gpt2', vocab_size=50257, model_max_len=1024, is_fast=True, padding_side='right', truncation_side='right', special_tokens={'bos_token': '<|endoftext|>', 'eos_token': '<|endoftext|>', 'unk_token': '<|endoftext|>', 'pad_token': '<|endoftext|>'})
+
+    # TODO: model
+    # Some info on structure:
+    # lm_head structure: Linear(in_features=768, out_features=50257, bias=False)
 
     # Add model pruning if enabled
     # TODO: This is probably a horrible choice of spot to do pruning. If my understanding is correct, this should more
     # likely be moved just before the training loop and coupled with a `prune.remove` afterwards.
     # Cf. https://stackoverflow.com/questions/73103144/how-to-fine-tune-the-pruned-model-in-pytorch
-    if cfg.training.pruning.enabled:
+    if cfg.training.model_pruning.enabled:
         prune.random_unstructured(model.lm_head,
-                                  name=cfg.training.pruning.parameter,
-                                  amount=cfg.training.pruning.amount)
+                                  name=cfg.training.model_pruning.parameter,
+                                  amount=cfg.training.model_pruning.amount)
         # prune.l1_unstructured(model, name="bias", amount=3)
 
     # Currently AdamW - to the best of our knowledge, this is the one to use
