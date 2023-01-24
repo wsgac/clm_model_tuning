@@ -37,7 +37,7 @@ from transformers import (
 )
 
 import bittensor
-import ipdb
+# import ipdb
 
 
 def check_cfg_and_load_defaults(cfg: DictConfig) -> DictConfig:
@@ -223,7 +223,7 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
             num_proc=cfg.tokenizer.preprocessing_num_workers,
             load_from_cache_file=not cfg.dataset.overwrite_cache,
             desc="Running tokenizer on dataset",
-            remove_columns=["text"]
+            remove_columns=list(cfg.training.input_pruning.columns_to_remove)
         )
 
         if cfg.dataset.concatenate_raw is True:

@@ -54,6 +54,8 @@ training:
     enabled: true
     # Percentage of input tokens to drop
     ratio: 0.05
+    # Use this to remove raw (untokenized) portion of input data, i.e. a list of unwanted columns
+    columns_to_remove: ["text"]
 
   checkpoint:
     resume_from_checkpoint: 0 # integer representing which checkpoint to load from, or <= 0 to not
