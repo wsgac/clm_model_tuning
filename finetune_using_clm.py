@@ -216,6 +216,8 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
 
     with accelerator.main_process_first():
 
+        columns_to_remove = list(cfg.training.input_pruning.columns_to_remove) \
+            if cfg.training.input_pruning.enabled else []
         # Here the actual magic takes place
         tokenized_datasets = raw_datasets.map(
             tokenize_fn,
@@ -223,7 +225,7 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
             num_proc=cfg.tokenizer.preprocessing_num_workers,
             load_from_cache_file=not cfg.dataset.overwrite_cache,
             desc="Running tokenizer on dataset",
-            remove_columns=list(cfg.training.input_pruning.columns_to_remove)
+            remove_columns=columns_to_remove
         )
 
         if cfg.dataset.concatenate_raw is True:
