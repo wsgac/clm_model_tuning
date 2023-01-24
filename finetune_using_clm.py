@@ -304,7 +304,7 @@ def main(cfg: DictConfig):
     raw_datasets = load_raw_datasets(cfg)
     # In this line the tokenizer is applied to the datasets
     tokenized_datasets = preprocess(cfg, accelerator, tokenizer, raw_datasets)
-    if "train" not in tokenized_datasets.column_names:
+    if ("train" not in tokenized_datasets.column_names) or ("validation" not in tokenized_datasets.column_names):
         tokenized_datasets = tokenized_datasets.train_test_split(
             test_size=cfg.training.val_split_percent / 100
         )
