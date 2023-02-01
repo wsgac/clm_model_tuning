@@ -35,6 +35,7 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
+import tensor_parallel as tp
 
 import bittensor
 # import ipdb
@@ -132,6 +133,7 @@ def load_model_and_tokenizer(cfg: DictConfig):
         from_tf=bool(".ckpt" in cfg.model.name),
         config=config,
     )
+    tp.tensor_parallel(model, ["cuda:0", "cuda:1"])
     model.resize_token_embeddings(len(tokenizer))
 
     return tokenizer, model
