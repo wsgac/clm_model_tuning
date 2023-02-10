@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import random
+import time
 from itertools import chain
 
 import datasets
@@ -155,7 +156,7 @@ def create_optimizer(cfg, model):
             "weight_decay": 0.0,
         },
     ]
-    print("BP8 optimizer_grouped_parameters:", optimizer_grouped_parameters)
+
     return torch.optim.AdamW(
         optimizer_grouped_parameters, lr=cfg.training.learning_rate
     )
@@ -312,7 +313,7 @@ def main(cfg: DictConfig):
     ) = accelerator.prepare(
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
-    print("BP7  model_dir", dir(model_dir))
+    print("BP7  model_dir", dir(model))
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -385,7 +386,11 @@ def main(cfg: DictConfig):
             resume_step -= starting_epoch * len(train_dataloader)
 
     for epoch in range(starting_epoch, cfg.training.num_epochs):
+        print("EPOCH_:", epoch)
+        t1 = time.time()
         model.train()
+        print("TRAIN TIME:" time.time() - t1)
+
         if cfg.tracking.enabled is True:
             total_loss = 0
         train_losses = []
