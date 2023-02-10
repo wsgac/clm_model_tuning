@@ -70,14 +70,17 @@ def create_accelerator(cfg: DictConfig) -> Accelerator:
 def load_raw_datasets(cfg: DictConfig) -> DatasetDict:
 
     if cfg.dataset.name == "bittensor":
+        print("DATASETNAME", cfg.dataset.name)
 
         dataset = bittensor.dataset(
             no_tokenizer=True,
             batch_size=cfg.training.train_batch_size,
             block_size=cfg.dataset.block_size,
         )
+        print("BATCHES", cfg.dataset.num_batches)
         dataloader = dataset.dataloader(cfg.dataset.num_batches)
         bittensor_dataset = {"text": []}
+
         for batch in tqdm(dataloader, desc="Loading data from bittensor IPFS"):
             bittensor_dataset["text"].extend(batch)
         raw_datasets = Dataset.from_dict(bittensor_dataset)
@@ -152,6 +155,7 @@ def create_optimizer(cfg, model):
             "weight_decay": 0.0,
         },
     ]
+    print("BP8 optimizer_grouped_parameters:", optimizer_grouped_parameters)
     return torch.optim.AdamW(
         optimizer_grouped_parameters, lr=cfg.training.learning_rate
     )
@@ -240,23 +244,27 @@ def main(cfg: DictConfig):
 
     logger.info(accelerator.state, main_process_only=False)
     logger.info(OmegaConf.to_yaml(cfg))
+    print("BP1")
 
     tokenizer, model = load_model_and_tokenizer(cfg)
     optimizer = create_optimizer(cfg, model)
-
+    print("BP2")
     lr_scheduler = get_scheduler(
         name=cfg.training.lr_scheduler,
         optimizer=optimizer,
         num_warmup_steps=cfg.training.lr_warmup_steps,
         num_training_steps=cfg.training.max_train_steps,
     )
+    print("BP3")
 
     # On TPU, the tie weights in our model have been disconnected, so we need to restore the ties.
     if accelerator.distributed_type == DistributedType.TPU:
         model.tie_weights()
 
+    print("BP4")
     # Load and preprocess data
     raw_datasets = load_raw_datasets(cfg)
+
     tokenized_datasets = preprocess(cfg, accelerator, tokenizer, raw_datasets)
     if "train" not in tokenized_datasets.column_names:
         tokenized_datasets = tokenized_datasets.train_test_split(
@@ -270,6 +278,8 @@ def main(cfg: DictConfig):
 
     train_dataset = tokenized_datasets["train"]
     eval_dataset = tokenized_datasets["validation"]
+    print("BP5, train_ds", len(train_dataset))
+    print("BP5, train_ds_ex", train_dataset[0])
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
@@ -284,6 +294,8 @@ def main(cfg: DictConfig):
         collate_fn=default_data_collator,
         batch_size=cfg.training.train_batch_size,
     )
+    print("BP6, train_dl", len(train_dataloader))
+
     eval_dataloader = DataLoader(
         eval_dataset,
         collate_fn=default_data_collator,
@@ -300,6 +312,7 @@ def main(cfg: DictConfig):
     ) = accelerator.prepare(
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
+    print("BP7  model_dir", dir(model_dir))
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
