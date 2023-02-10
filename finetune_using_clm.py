@@ -389,7 +389,7 @@ def main(cfg: DictConfig):
         print("EPOCH_:", epoch)
         t1 = time.time()
         model.train()
-        print("TRAIN TIME:" time.time() - t1)
+        print("TRAIN TIME:", time.time() - t1)
 
         if cfg.tracking.enabled is True:
             total_loss = 0
