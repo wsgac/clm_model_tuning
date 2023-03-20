@@ -1,6 +1,7 @@
 import bittensor
 import requests
 import numpy as np
+from multiprocessing.pool import ThreadPool
 
 IPFS_ENDPOINT = "http://global.ipfs.opentensor.ai/"
 
@@ -12,6 +13,11 @@ def request_to_ipfs(hash):
 
 
 def get_hash_table():
+
+    def save_leaf(l):
+        l['Folder'] = name
+        dataset.get_text(l)
+
     the_mountain_parent_hash = "QmSdDg6V9dgpdAFtActs75Qfc36qJtm9y8a7yrQ1rHm7ZX"
     result = request_to_ipfs(the_mountain_parent_hash)
     files_meta = result['Links']
@@ -24,13 +30,9 @@ def get_hash_table():
         dataset.save_dataset = False
         leaves.extend(dataset.get_dataset(file_meta))
         dataset.save_dataset = True
-        for l in leaves:
-            try:
-                l['Folder'] = name
-                dataset.get_text(l)
-            except Exception as e:
-                print(e.args)
-                pass
+
+        with ThreadPool(5) as pool:
+            out = pool.map(save_leaf, leaves)
 
 
 def random_sieve(data, fraction):
