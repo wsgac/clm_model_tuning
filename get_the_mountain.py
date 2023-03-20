@@ -1,5 +1,6 @@
 import bittensor
 import requests
+import numpy as np
 
 IPFS_ENDPOINT = "http://global.ipfs.opentensor.ai/"
 
@@ -30,6 +31,25 @@ def get_hash_table():
             except Exception as e:
                 print(e.args)
                 pass
+
+
+def random_sieve(data, fraction):
+    """
+    Sparsify data by keeping a fraction of input data
+
+    :param data: list of  objects
+    :param fraction: percentage of data to keep (size-wise)
+    :return: filtered list of objects
+    """
+    total_size = sum(item["Size"] for item in data)
+    required_size = fraction * total_size
+    result = []
+    for i in np.random.permutation(len(data)):
+        result.append(data[i])
+        required_size -= data[i]["Size"]
+        if required_size <= 0:
+            break
+    return result
 
 
 def run():
