@@ -14,7 +14,7 @@ def request_to_ipfs(hash):
 
 def get_hash_table():
 
-    def save_leaf(l):
+    def save_leaf(l, name):
         l['Folder'] = name
         dataset.get_text(l)
 
@@ -22,7 +22,7 @@ def get_hash_table():
     result = request_to_ipfs(the_mountain_parent_hash)
     files_meta = result['Links']
     dataset = bittensor.dataset(no_tokenizer=True, save_dataset=False)
-    dataset_hashes = dataset.dataset_hashes
+    dataset.backup_dataset_cap_size = 2e12
     for file_meta in files_meta:
         name = file_meta['Name'].split(".")[0]
         file_meta['Folder'] = name
@@ -31,8 +31,8 @@ def get_hash_table():
         leaves.extend(dataset.get_dataset(file_meta))
         dataset.save_dataset = True
 
-        with ThreadPool(5) as pool:
-            out = pool.map(save_leaf, leaves)
+        with ThreadPool(50) as pool:
+            out = pool.map(lambda x: save_leaf(x, name), leaves)
 
 
 def random_sieve(data, fraction):
