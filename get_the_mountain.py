@@ -1,9 +1,26 @@
+import argparse
+
 import bittensor
 import requests
 import numpy as np
 from multiprocessing.pool import ThreadPool
 
 IPFS_ENDPOINT = "http://global.ipfs.opentensor.ai/"
+SUBDATASETS = [
+    "ArXiv",
+    "BookCorpus2",
+    "Books3",
+    "DMMathematics",
+    "EnronEmails",
+    "EuroParl",
+    "Gutenberg_PG",
+    "HackerNews",
+    "NIHExPorter",
+    "OpenSubtitles",
+    "PhilPapers",
+    "UbuntuIRC",
+    "YoutubeSubtitles"
+]
 
 
 def request_to_ipfs(hash):
@@ -12,27 +29,42 @@ def request_to_ipfs(hash):
         return result.json()
 
 
-def get_hash_table():
+def create_threading_pool(ds):
+    dataset = ds['dataset']
+    name = ds['name']
+    leaves = ds['leaves']
+    with ThreadPool(200) as pool:
+        out = pool.map(lambda x: save_leaf(dataset, x, name), leaves)
 
-    def save_leaf(l, name):
-        l['Folder'] = name
-        dataset.get_text(l)
 
+def save_leaf(dataset, l, name):
+    l['Folder'] = name
+    dataset.get_text(l)
+
+
+def run(subdatasets):
     the_mountain_parent_hash = "QmSdDg6V9dgpdAFtActs75Qfc36qJtm9y8a7yrQ1rHm7ZX"
     result = request_to_ipfs(the_mountain_parent_hash)
     files_meta = result['Links']
     dataset = bittensor.dataset(no_tokenizer=True, save_dataset=False)
     dataset.backup_dataset_cap_size = 2e12
-    for file_meta in files_meta:
+    datasets_list = []
+    for i, file_meta in enumerate(files_meta):
         name = file_meta['Name'].split(".")[0]
-        file_meta['Folder'] = name
-        leaves = []
-        dataset.save_dataset = False
-        leaves.extend(dataset.get_dataset(file_meta))
-        dataset.save_dataset = True
+        if name in subdatasets:
+            res = {}
+            res['name'] = name
+            file_meta['Folder'] = name
+            leaves = []
+            dataset.save_dataset = False
+            leaves.extend(dataset.get_dataset(file_meta))
+            dataset.save_dataset = True
+            res['leaves'] = leaves
+            res['dataset'] = dataset
+            datasets_list.append(res)
 
-        with ThreadPool(50) as pool:
-            out = pool.map(lambda x: save_leaf(x, name), leaves)
+    for ds in datasets_list:
+        create_threading_pool(ds)
 
 
 def random_sieve(data, fraction):
@@ -54,8 +86,12 @@ def random_sieve(data, fraction):
     return result
 
 
-def run():
-    get_hash_table()
-
-
-run()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--subdataset", type=str, default="all")
+    args = parser.parse_args()
+    if args.subdataset == "all":
+        subdatasets = SUBDATASETS
+    else:
+        subdatasets = [args.subdataset]
+    run(subdatasets)
