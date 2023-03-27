@@ -15,7 +15,7 @@ dataset:
   concatenate_raw: false # only really necessary when loading a local .txt file
 
 model:
-  name: gpt2
+  name: sshleifer/tiny-gpt2
   config_name: null
 
 tokenizer:
@@ -64,3 +64,7 @@ training:
 tracking:
   enabled: false
   report_to: "all"
+
+# This section controls if and how we search for optimal hyperparameters
+hyperoptimization:
+  search: true
