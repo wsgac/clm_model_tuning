@@ -20,7 +20,7 @@ import hydra
 import torch
 import transformers
 from accelerate import Accelerator, DistributedType
-from accelerate.logging import get_logger
+from accelerate.logging import get_logger, MultiProcessAdapter
 from accelerate.utils import set_seed
 from datasets import Dataset, DatasetDict, load_dataset
 from omegaconf import OmegaConf
@@ -35,6 +35,8 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
+from sklearn.model_selection import RandomizedSearchCV
+import numpy as np
 
 import bittensor
 # import ipdb
@@ -240,21 +242,144 @@ def preprocess(cfg, accelerator, tokenizer, raw_datasets):
     return tokenized_datasets
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig):
+def tune_inner(cfg: DictConfig,
+               logger: MultiProcessAdapter,
+               accelerator: Accelerator,
+               model,
+               train_dataloader,
+               eval_dataloader):
+    completed_steps = 0
+    starting_epoch = 0
+
+    # Potentially load in the weights and states from a previous save
+    if cfg.training.checkpoint.resume_from_checkpoint > 0:
+        accelerator.print(
+            f"Resumed from checkpoint: {cfg.training.checkpoint.resume_from_checkpoint}"
+        )
+        accelerator.load_state(cfg.training.checkpoint.resume_from_checkpoint)
+        path = os.path.basename(cfg.training.checkpoint.resume_from_checkpoint)
+        training_difference = os.path.splitext(path)[0]
+
+        if "epoch" in training_difference:
+            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            resume_step = None
+        else:
+            resume_step = int(training_difference.replace("step_", ""))
+            starting_epoch = resume_step // len(train_dataloader)
+            resume_step -= starting_epoch * len(train_dataloader)
+
+    # Return values
+    perplexity = 0
+    eval_loss = 0
+    train_loss = 0
+
+    for epoch in range(starting_epoch, cfg.training.num_epochs):
+        model.train()
+        if cfg.tracking.enabled is True:
+            total_loss = 0
+        train_losses = []
+        for step, batch in enumerate(train_dataloader):
+            # We need to skip steps until we reach the resumed step
+            if (
+                    cfg.training.checkpoint.resume_from_checkpoint
+                    and epoch == starting_epoch
+            ):
+                if resume_step is not None and step < resume_step:
+                    completed_steps += 1
+                    continue
+
+            outputs = model(**batch)
+            loss = outputs.loss
+            train_losses.append(
+                accelerator.gather(loss.repeat(cfg.training.train_batch_size))
+            )
+            # We keep track of the loss at each epoch
+            if cfg.tracking.enabled is True:
+                total_loss += loss.detach().float()
+            loss = loss / cfg.training.gradient_accumulation_steps
+            accelerator.backward(loss)
+
+            if (
+                    step % cfg.training.gradient_accumulation_steps == 0
+                    or step == len(train_dataloader) - 1
+            ):
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad()
+                progress_bar.update(1)
+                completed_steps += 1
+
+            if step % cfg.training.eval_every == 0:
+                train_losses_tensor = torch.cat(train_losses)
+                train_loss = torch.mean(train_losses_tensor)
+                model.eval()
+                eval_losses = []
+                for _eval_step, eval_batch in enumerate(eval_dataloader):
+                    with torch.no_grad():
+                        outputs = model(**eval_batch)
+
+                    loss = outputs.loss
+                    eval_losses.append(
+                        accelerator.gather(loss.repeat(cfg.training.eval_batch_size))
+                    )
+
+                losses = torch.cat(eval_losses)
+                losses = losses[: len(eval_dataset)]
+                try:
+                    eval_loss = torch.mean(losses)
+                    perplexity = math.exp(eval_loss)
+                except OverflowError:
+                    perplexity = float("inf")
+
+                logger.info(
+                    f"epoch {epoch}: perplexity: {perplexity} train_loss: {train_loss} eval_loss: {eval_loss}"
+                )
+
+                if save_models:
+                    epoch_dir = f"epoch_{epoch}_most_recent"
+                    if cfg.output_dir is not None:
+                        output_dir = os.path.join(cfg.output_dir, epoch_dir)
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    unwrapped_model.save_pretrained(
+                        output_dir,
+                        is_main_process=accelerator.is_main_process,
+                        save_function=accelerator.save,
+                    )
+                    if accelerator.is_main_process:
+                        tokenizer.save_pretrained(output_dir)
+
+        if cfg.tracking.enabled is True:
+            accelerator.log(
+                {
+                    "perplexity": perplexity,
+                    "eval_loss": eval_loss,
+                    "train_loss": total_loss.item() / len(train_dataloader),
+                    "epoch": epoch,
+                    "step": completed_steps,
+                },
+                step=completed_steps,
+            )
+
+        logger.info(f"done epoch {epoch}")
+
+    if cfg.output_dir is not None and save_models:
+        accelerator.wait_for_everyone()
+        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model.save_pretrained(
+            cfg.output_dir,
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
+        )
+        if accelerator.is_main_process:
+            tokenizer.save_pretrained(cfg.output_dir)
+
+    return perplexity, eval_loss, train_loss
+
+def tune(cfg: DictConfig, logger: MultiProcessAdapter, accelerator: Accelerator, save_models: bool):
 
     cfg = check_cfg_and_load_defaults(cfg)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
-    logger = get_logger(__name__)
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
-    )
-
-    accelerator = create_accelerator(cfg)
-    accelerator.wait_for_everyone()
 
     if cfg.training.seed is not None:
         logger.info(f"Setting random seed to {cfg.training.seed}")
@@ -267,23 +392,6 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
 
     tokenizer, model = load_model_and_tokenizer(cfg)
-    # TODO: tokenizer
-    # Typical representation:
-    # PreTrainedTokenizerFast(name_or_path='gpt2', vocab_size=50257, model_max_len=1024, is_fast=True, padding_side='right', truncation_side='right', special_tokens={'bos_token': '<|endoftext|>', 'eos_token': '<|endoftext|>', 'unk_token': '<|endoftext|>', 'pad_token': '<|endoftext|>'})
-
-    # TODO: model
-    # Some info on structure:
-    # lm_head structure: Linear(in_features=768, out_features=50257, bias=False)
-
-    # Add model pruning if enabled
-    # TODO: This is probably a horrible choice of spot to do pruning. If my understanding is correct, this should more
-    # likely be moved just before the training loop and coupled with a `prune.remove` afterwards.
-    # Cf. https://stackoverflow.com/questions/73103144/how-to-fine-tune-the-pruned-model-in-pytorch
-    if cfg.training.model_pruning.enabled:
-        prune.random_unstructured(model.lm_head,
-                                  name=cfg.training.model_pruning.parameter,
-                                  amount=cfg.training.model_pruning.amount)
-        # prune.l1_unstructured(model, name="bias", amount=3)
 
     # Currently AdamW - to the best of our knowledge, this is the one to use
     optimizer = create_optimizer(cfg, model)
@@ -397,125 +505,35 @@ def main(cfg: DictConfig):
         disable=not accelerator.is_local_main_process,
     )
 
-    completed_steps = 0
-    starting_epoch = 0
 
-    # Potentially load in the weights and states from a previous save
-    if cfg.training.checkpoint.resume_from_checkpoint > 0:
-        accelerator.print(
-            f"Resumed from checkpoint: {cfg.training.checkpoint.resume_from_checkpoint}"
-        )
-        accelerator.load_state(cfg.training.checkpoint.resume_from_checkpoint)
-        path = os.path.basename(cfg.training.checkpoint.resume_from_checkpoint)
-        training_difference = os.path.splitext(path)[0]
 
-        if "epoch" in training_difference:
-            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
-            resume_step = None
-        else:
-            resume_step = int(training_difference.replace("step_", ""))
-            starting_epoch = resume_step // len(train_dataloader)
-            resume_step -= starting_epoch * len(train_dataloader)
+    tune_inner(cfg, logger, accelerator, )
 
-    for epoch in range(starting_epoch, cfg.training.num_epochs):
-        model.train()
-        if cfg.tracking.enabled is True:
-            total_loss = 0
-        train_losses = []
-        for step, batch in enumerate(train_dataloader):
-            # We need to skip steps until we reach the resumed step
-            if (
-                    cfg.training.checkpoint.resume_from_checkpoint
-                    and epoch == starting_epoch
-            ):
-                if resume_step is not None and step < resume_step:
-                    completed_steps += 1
-                    continue
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig):
 
-            outputs = model(**batch)
-            loss = outputs.loss
-            train_losses.append(
-                accelerator.gather(loss.repeat(cfg.training.train_batch_size))
-            )
-            # We keep track of the loss at each epoch
-            if cfg.tracking.enabled is True:
-                total_loss += loss.detach().float()
-            loss = loss / cfg.training.gradient_accumulation_steps
-            accelerator.backward(loss)
+    logger = get_logger(__name__)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+    )
 
-            if (
-                    step % cfg.training.gradient_accumulation_steps == 0
-                    or step == len(train_dataloader) - 1
-            ):
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-                progress_bar.update(1)
-                completed_steps += 1
+    accelerator = create_accelerator(cfg)
+    accelerator.wait_for_everyone()
 
-            if step % cfg.training.eval_every == 0:
-                train_losses_tensor = torch.cat(train_losses)
-                train_loss = torch.mean(train_losses_tensor)
-                model.eval()
-                eval_losses = []
-                for _eval_step, eval_batch in enumerate(eval_dataloader):
-                    with torch.no_grad():
-                        outputs = model(**eval_batch)
-
-                    loss = outputs.loss
-                    eval_losses.append(
-                        accelerator.gather(loss.repeat(cfg.training.eval_batch_size))
-                    )
-
-                losses = torch.cat(eval_losses)
-                losses = losses[: len(eval_dataset)]
-                try:
-                    eval_loss = torch.mean(losses)
-                    perplexity = math.exp(eval_loss)
-                except OverflowError:
-                    perplexity = float("inf")
-
-                logger.info(
-                    f"epoch {epoch}: perplexity: {perplexity} train_loss: {train_loss} eval_loss: {eval_loss}"
-                )
-
-                epoch_dir = f"epoch_{epoch}_most_recent"
-                if cfg.output_dir is not None:
-                    output_dir = os.path.join(cfg.output_dir, epoch_dir)
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(
-                    output_dir,
-                    is_main_process=accelerator.is_main_process,
-                    save_function=accelerator.save,
-                )
-                if accelerator.is_main_process:
-                    tokenizer.save_pretrained(output_dir)
-
-        if cfg.tracking.enabled is True:
-            accelerator.log(
-                {
-                    "perplexity": perplexity,
-                    "eval_loss": eval_loss,
-                    "train_loss": total_loss.item() / len(train_dataloader),
-                    "epoch": epoch,
-                    "step": completed_steps,
-                },
-                step=completed_steps,
-            )
-
-        logger.info(f"done epoch {epoch}")
-
-    if cfg.output_dir is not None:
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(
-            cfg.output_dir,
-            is_main_process=accelerator.is_main_process,
-            save_function=accelerator.save,
-        )
-        if accelerator.is_main_process:
-            tokenizer.save_pretrained(cfg.output_dir)
+    if cfg.hyperoptimization.search:
+        logger.info(f"Running hyperparameter search")
+        RandomizedSearchCV
+    else:
+        logger.info(f"Regular tuning")
+        perplexity, eval_loss, train_loss = tune(cfg, logger, accelerator, save_models=True)
+        logger.info(f"Regular tuning completed. Final parameter results:\n"
+                    f"perplexity = {perplexity}\n"
+                    f"eval_loss = {eval_loss}\n"
+                    f"train_loss = {train_loss}")
 
 
 if __name__ == "__main__":
     main()
+

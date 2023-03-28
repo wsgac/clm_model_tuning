@@ -1,6 +1,10 @@
-accelerate
-datasets >= 1.8.0
-sentencepiece != 0.1.92
-hydra-core
-ipdb == 0.13.11
--e git+https://git@github.com/opentensor/bittensor.git#egg=bittensor
+accelerate==0.16.0
+datasets==2.10.0
+sentencepiece!=0.1.92
+hydra-core==1.3.2
+-e git+https://git@github.com/opentensor/bittensor.git@release/3.7.0#egg=bittensor
+
+transformers==4.20.1
+omegaconf~=2.3.0
+tqdm~=4.64.1
+scikit-learn~=1.2.1
