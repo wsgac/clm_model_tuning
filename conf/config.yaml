@@ -1,70 +1,54 @@
 output_dir: "tuned-model"
+load_dir: "epoch_0_most_recent" #"model_with_best_eval"
 
 bittensor:
-  network: "nobunaga"
+  network: "nobunaga" #"nakamoto"
 
 dataset:
   # either 'bittensor', a local path, or one from huggingface
   name: "bittensor"
   config_name: null # necessary for huggingface datasets
-  num_batches: 10
-  block_size: null # if null, defaults to bittensor's validator sequence length.
+  num_batches: 200000
+  block_size: 256 # if null, defaults to bittensor's validator sequence length.
 
+  data_dir: "train_data"
+  n_samples: 300000
+  n_shards: 1
   overwrite_cache: false
   keep_linebreaks: true
   concatenate_raw: false # only really necessary when loading a local .txt file
 
 model:
-  name: sshleifer/tiny-gpt2
+  name: EleutherAI/pythia-12b
   config_name: null
 
 tokenizer:
-  name: null
+  name: EleutherAI/pythia-12b
   use_fast: true
   preprocessing_num_workers: null
   pad_token: "[PAD]"
 
 training:
-  seed: null
+  seed: 102
   val_split_percent: 5
 
   # if null these both default to bittensor's validator batch size
-  train_batch_size: null
-  eval_batch_size: null
+  train_batch_size: 12
+  eval_batch_size: 16
 
-  learning_rate: 1e-5
-  weight_decay: 0.0
-  num_epochs: 1
-  max_train_steps: null
-  gradient_accumulation_steps: 1
-  lr_scheduler: "constant" # ["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]
-  lr_warmup_steps: 0
-  eval_every: 50
-
-  model_pruning:
-    # Whether to apply parameter pruning after training or not
-    enabled: false
-    # Fraction of parameters to prune. Range: [0.0, 1.0]
-    amount: 0.2
-    # Parameter on which pruning will take place
-    parameter: "weight"
-
-  # Pseudo-randomly drop a certain percentage of input tokens
-  input_pruning:
-    enabled: true
-    # Percentage of input tokens to drop
-    ratio: 0.05
-    # Use this to remove raw (untokenized) portion of input data, i.e. a list of unwanted columns
-    columns_to_remove: ["text"]
+  learning_rate: 5e-5
+  weight_decay: 0
+  num_epochs: 50
+  max_train_steps: 400000
+  gradient_accumulation_steps: 64
+  lr_scheduler: "cosine_with_restarts" # ["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]
+  lr_warmup_steps: 100
+  eval_every: 25
 
   checkpoint:
     resume_from_checkpoint: 0 # integer representing which checkpoint to load from, or <= 0 to not
-    every_n_steps: null
+    every_n_steps: 20
 
 tracking:
   enabled: false
   report_to: "all"
-
-# This section controls if and how we search for optimal hyperparameters
-hyperoptimization:
-  search: true
