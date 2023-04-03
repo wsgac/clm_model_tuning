@@ -426,7 +426,7 @@ def evaluate(cfg, model, eval_dataloader, accelerator, device, tokenizer, to_tex
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig, separator="||--<<END>>--||"):
+def main1(cfg: DictConfig, separator="||--<<END>>--||"):
     cfg = check_cfg_and_load_defaults(cfg)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
@@ -436,12 +436,12 @@ def main(cfg: DictConfig, separator="||--<<END>>--||"):
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
-    #     accelerator = (
-    #         Accelerator(log_with=cfg.tracking.report_to, logging_dir=cfg.output_dir)
-    #         if cfg.tracking.enabled
-    #         else Accelerator(fp16=True, deepspeed_plugin=deepspeed_plugin)
-    #         #else Accelerator()
-    #     )
+    accelerator = (
+        Accelerator(log_with=cfg.tracking.report_to, logging_dir=cfg.output_dir)
+        if cfg.tracking.enabled
+        else Accelerator(fp16=True, deepspeed_plugin=deepspeed_plugin)
+        # else Accelerator()
+    )
     accelerator = (
         Accelerator(log_with=cfg.tracking.report_to,
                     logging_dir=cfg.output_dir) if cfg.tracking.enabled else Accelerator()
@@ -794,6 +794,193 @@ def main(cfg: DictConfig, separator="||--<<END>>--||"):
             tokenizer.save_pretrained(cfg.output_dir)
 
 
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig, separator="||--<<END>>--||"):
+    cfg = check_cfg_and_load_defaults(cfg)
+    os.makedirs(cfg.output_dir, exist_ok=True)
+
+    logger = get_logger(__name__)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+    )
+    # accelerator = (
+    #     Accelerator(log_with=cfg.tracking.report_to, logging_dir=cfg.output_dir)
+    #     if cfg.tracking.enabled
+    #     else Accelerator(fp16=True, deepspeed_plugin=deepspeed_plugin)
+    #     #else Accelerator()
+    # )
+    accelerator = (
+        Accelerator(log_with=cfg.tracking.report_to,
+                    logging_dir=cfg.output_dir) if cfg.tracking.enabled else Accelerator()
+    )
+
+    accelerator.wait_for_everyone()
+    device = accelerator.device
+
+    logger.info(accelerator.state, main_process_only=False)
+    logger.info(OmegaConf.to_yaml(cfg))
+
+    tokenizer, model = load_model_and_tokenizer(cfg)
+
+    # Optimizer
+    # Split weights in two groups, one with weight decay and the other not.
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": cfg.training.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+    # New Code #
+    # Creates Dummy Optimizer if `optimizer` was specified in the config file else creates Adam Optimizer
+    optimizer_cls = (
+        torch.optim.AdamW
+        if accelerator.state.deepspeed_plugin is None
+           or "optimizer" not in accelerator.state.deepspeed_plugin.deepspeed_config
+        else DummyOptim
+    )
+    optimizer = optimizer_cls(optimizer_grouped_parameters, lr=cfg.training.learning_rate)
+
+    if (
+            accelerator.state.deepspeed_plugin is None
+            or "scheduler" not in accelerator.state.deepspeed_plugin.deepspeed_config
+    ):
+        lr_scheduler = get_scheduler(
+            name=cfg.training.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=cfg.training.lr_warmup_steps,
+            num_training_steps=cfg.training.max_train_steps,
+        )
+    else:
+        lr_scheduler = DummyScheduler(
+            optimizer, total_num_steps=cfg.training.max_train_steps, warmup_num_steps=cfg.training.lr_warmup_steps
+        )
+
+    # On TPU, the tie weights in our model have been disconnected, so we need to restore the ties.
+    if accelerator.distributed_type == DistributedType.TPU:
+        model.tie_weights()
+
+    # for file in os.listdir
+    # Only show the progress bar once on each machine.
+    progress_bar = tqdm(range(cfg.training.max_train_steps), disable=not accelerator.is_local_main_process)
+    completed_steps = 0
+    starting_epoch = 0
+    best_metric = None
+    best_metric_checkpoint = None
+
+    # New Code
+    # Get gradient accumulation steps from deepspeed config if available
+    if accelerator.state.deepspeed_plugin is not None:
+        cfg.training.gradient_accumulation_steps = accelerator.state.deepspeed_plugin.deepspeed_config[
+            "gradient_accumulation_steps"
+        ]
+
+    # print(files)
+    # n_files = len(files)
+
+    eval_dataset = load_text("/root/data_batch.txt", separator)
+    eval_dataset = preprocess(cfg, accelerator, tokenizer, eval_dataset)
+    eval_length = len(eval_dataset)
+
+    eval_dataloader = DataLoader(
+        eval_dataset,
+        shuffle=False,
+        collate_fn=default_data_collator,
+        batch_size=cfg.training.eval_batch_size,
+    )
+
+    train_begin = True
+    # epoch_progress = tqdm(range(starting_epoch, cfg.training.num_epochs)
+    for epoch in tqdm(range(starting_epoch, cfg.training.num_epochs)):
+        files = [os.path.join(os.path.abspath("train_data"), each) for each in os.listdir(os.path.abspath("train_data"))
+                 if each.endswith(".txt")]
+        n_files = len(files)
+
+        file_seen = []
+        model.train()
+        file_count = 0
+        for file in files:
+            if file in file_seen:
+                continue
+
+            file_seen.append(file)
+            logger.info(f"\n\nLoading and processing text file: {file} for fine tuning.\n\n")
+            # Load and preprocess data
+            # train_dataset = load_text(file, separator)
+            # raw_datasets = load_raw_datasets(cfg)
+            # train_dataset = preprocess(cfg, accelerator, tokenizer, train_dataset)
+
+            # if train_begin:
+            #     # Log a few random samples from the training set:
+            #     for index in random.sample(range(len(train_dataset)), 3):
+            #         ex = train_dataset[index]
+            #         logger.info(f"Sample {index} of the training set: {ex}: \n")
+            #         logger.info(tokenizer.decode(ex["input_ids"]))
+            #
+            #
+            #     # Log a few random samples from the training set:
+            #     for index in random.sample(range(len(eval_dataset)), 3):
+            #         ex = eval_dataset[index]
+            #         logger.info(f"Sample {index} of the evaluation set: {ex}: \n")
+            #         logger.info(tokenizer.decode(ex["input_ids"]))
+            #
+            # # DataLoaders creation:
+            # train_dataloader = DataLoader(
+            #     train_dataset,
+            #     shuffle=True,
+            #     collate_fn=default_data_collator,
+            #     batch_size=cfg.training.train_batch_size,
+            # )
+
+            # train_length = len(train_dataset)
+            #             if eval_dataset is n:
+            #                 eval_length = len(eval_dataset)
+
+            if train_begin:
+                # Prepare everything using our accelerator
+                (
+                    model,
+                    optimizer,
+                    eval_dataloader,
+                    lr_scheduler,
+                ) = accelerator.prepare(
+                    model, optimizer, eval_dataloader, lr_scheduler
+                )
+            else:
+                # Prepare everything using our accelerator
+                (
+                    eval_dataloader,
+                ) = accelerator.prepare(
+                    eval_dataloader
+                )
+
+    print('Saving the model using the best weights checkpoint in the current output directory')
+    if cfg.output_dir is not None:
+        accelerator.wait_for_everyone()
+        unwrapped_model = accelerator.unwrap_model(model)
+
+        # New Code #
+        # Saves the whole/unpartitioned fp16 model when in ZeRO Stage-3 to the output directory if
+        # `stage3_gather_16bit_weights_on_model_save` is True in DeepSpeed Config file or
+        # `zero3_save_16bit_model` is True in DeepSpeed Plugin.
+        # For Zero Stages 1 and 2, models are saved as usual in the output directory.
+        # The model name saved is `pytorch_model.bin`
+        unwrapped_model.save_pretrained(
+            cfg.output_dir,
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
+            state_dict=accelerator.get_state_dict(model),
+        )
+        if accelerator.is_main_process:
+            tokenizer.save_pretrained(cfg.output_dir)
+
+
 #     print('Started Pushing the Model and Tokenizer to Hugging Face Hub')
 
 #     print('Pushing Model weights and other related files to Hugging Face Hub')
@@ -803,6 +990,6 @@ def main(cfg: DictConfig, separator="||--<<END>>--||"):
 
 if __name__ == "__main__":
     # print(os.path.abspath('train_data'))
-    load_raw_datasets()
-    # main()
+    # load_raw_datasets()
+    main()
 
