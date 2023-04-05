@@ -52,7 +52,7 @@ def diff_files(file1: str, file2: str):
 
 
 def print_diffs(diff_name, pattern: str = "*.py", directory: str = "backup"):
-    files = list_by_pattern(pattern, directory)
+    files = sorted(list_by_pattern(pattern, directory))
     with open(f"{diff_name}.diff", "w") as f:
         for first, second in zip(files, files[1:]):
             f.write(f"\nFirst file: {first}\nSecond file: {second}\n\nDiff:\n{diff_files(first, second)}\n")
