@@ -7,6 +7,7 @@ import re
 from typing import Dict, List
 
 p = re.compile("^(\d+)(.+$)")
+d = re.compile("^(\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d)(.+$)")
 
 
 def list_by_pattern(pattern: str = "*.py", directory: str = "backup") -> List[str]:
@@ -41,9 +42,11 @@ def epoch_to_readable(epoch: int) -> str:
 def rename_remaining(path: str):
     path = os.path.split(path)
     filepath = path[-1]
-    timestamp, rest = p.search(filepath).groups()
-    timestamp_readable = epoch_to_readable(int(timestamp))
-    os.rename(os.path.join(*path), os.path.join(*path[:-1], timestamp_readable + rest))
+    # Ensure date substitution only takes place once
+    if d.search(filepath) is None:
+        timestamp, rest = p.search(filepath).groups()
+        timestamp_readable = epoch_to_readable(int(timestamp))
+        os.rename(os.path.join(*path), os.path.join(*path[:-1], timestamp_readable + rest))
 
 
 def diff_files(file1: str, file2: str):
