@@ -24,7 +24,7 @@ def get_structure_of_files():
 
 def create_shard(queue):
     # Create string from opened hashes
-    print("Creating shards from list of hashes..")
+    print("Creating shards from list of hashes..x")
 
     separator = "||--<<END>>--||"
     file_counter = 0
